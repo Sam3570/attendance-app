@@ -16,60 +16,7 @@ import {
 } from 'react-icons/hi2'
 
 /* ---------------- STEP 1: GET PRECISE LOCATION WITH BETTER ERROR HANDLING ---------------- */
-
-
-export default function ScanQR() {
-  const [user, setUser] = useState(null)
-  const [trainee, setTrainee] = useState(null)
-
-  const [location, setLocation] = useState(null)
-  const [scanning, setScanning] = useState(false)
-  const [processing, setProcessing] = useState(false)
-  const [scannedOnce, setScannedOnce] = useState(false)
-  const [locationAttempts, setLocationAttempts] = useState(0)
-
-  const [error, setError] = useState('')
-  const [result, setResult] = useState(null)
-
-  const router = useRouter()
-
-  /* ---------------- AUTH CHECK ---------------- */
-  useEffect(() => {
-    checkUser()
-  }, [])
-
-  const checkUser = async () => {
-    const { data: { user } } = await supabase.auth.getUser()
-
-    if (!user) {
-      router.push('/login')
-      return
-    }
-
-    setUser(user)
-
-    const { data: traineeData, error: traineeError } = await supabase
-      .from('trainees')
-      .select('*')
-      .eq('user_id', user.id)
-      .maybeSingle()
-
-    if (traineeError) {
-      console.error('Error fetching trainee:', traineeError)
-      setError('Failed to load trainee profile. Please contact admin.')
-      return
-    }
-
-    if (!traineeData) {
-      setError('Trainee profile not found. Please contact admin.')
-      return
-    }
-
-    setTrainee(traineeData)
-  }
-
-  /* ---------------- STEP 1: GET PRECISE LOCATION ---------------- */
-  const prepareScanner = async () => {
+const prepareScanner = async () => {
   setError('')
   setResult(null)
   setProcessing(true)
@@ -151,6 +98,103 @@ export default function ScanQR() {
     setProcessing(false)
   }
 }
+
+export default function ScanQR() {
+  const [user, setUser] = useState(null)
+  const [trainee, setTrainee] = useState(null)
+
+  const [location, setLocation] = useState(null)
+  const [scanning, setScanning] = useState(false)
+  const [processing, setProcessing] = useState(false)
+  const [scannedOnce, setScannedOnce] = useState(false)
+  const [locationAttempts, setLocationAttempts] = useState(0)
+
+  const [error, setError] = useState('')
+  const [result, setResult] = useState(null)
+
+  const router = useRouter()
+
+  /* ---------------- AUTH CHECK ---------------- */
+  useEffect(() => {
+    checkUser()
+  }, [])
+
+  const checkUser = async () => {
+    const { data: { user } } = await supabase.auth.getUser()
+
+    if (!user) {
+      router.push('/login')
+      return
+    }
+
+    setUser(user)
+
+    const { data: traineeData, error: traineeError } = await supabase
+      .from('trainees')
+      .select('*')
+      .eq('user_id', user.id)
+      .maybeSingle()
+
+    if (traineeError) {
+      console.error('Error fetching trainee:', traineeError)
+      setError('Failed to load trainee profile. Please contact admin.')
+      return
+    }
+
+    if (!traineeData) {
+      setError('Trainee profile not found. Please contact admin.')
+      return
+    }
+
+    setTrainee(traineeData)
+  }
+
+  /* ---------------- STEP 1: GET PRECISE LOCATION ---------------- */
+  const prepareScanner = async () => {
+    setError('')
+    setResult(null)
+    setProcessing(true)
+    setScannedOnce(false)
+    setLocationAttempts(0)
+
+    try {
+      console.log('📍 Requesting precise GPS location...')
+      
+      // Get location with accuracy validation
+      const loc = await getCurrentLocation(100, 15000) // Want 100m accuracy, wait max 15s
+      
+      setLocationAttempts(prev => prev + 1)
+      
+      console.log('✅ Location obtained:', {
+        lat: loc.latitude.toFixed(6),
+        lon: loc.longitude.toFixed(6),
+        accuracy: Math.round(loc.accuracy) + 'm'
+      })
+
+      // Validate accuracy before proceeding
+      const accuracyCheck = validateLocationAccuracy(loc.accuracy, 200)
+      
+      if (!accuracyCheck.valid) {
+        setError(accuracyCheck.message)
+        setProcessing(false)
+        return
+      }
+
+      // Show warning if accuracy is moderate (100-200m)
+      if (loc.accuracy > 100) {
+        console.warn(`⚠️ Moderate accuracy: ${Math.round(loc.accuracy)}m`)
+      }
+
+      setLocation(loc)
+      setScanning(true)
+      
+    } catch (err) {
+      console.error('❌ Location error:', err)
+      setError(err.message || 'Unable to get your location. Please enable location services and try again.')
+    } finally {
+      setProcessing(false)
+    }
+  }
 
   /* ---------------- STEP 2: SCAN QR CODE ---------------- */
   const handleScan = async (data) => {
