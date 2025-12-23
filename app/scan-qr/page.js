@@ -15,6 +15,90 @@ import {
   HiOutlineSignal
 } from 'react-icons/hi2'
 
+/* ---------------- STEP 1: GET PRECISE LOCATION WITH BETTER ERROR HANDLING ---------------- */
+const prepareScanner = async () => {
+  setError('')
+  setResult(null)
+  setProcessing(true)
+  setScannedOnce(false)
+  setLocationAttempts(0)
+
+  // Check geolocation support first
+  const geoCheck = checkGeolocationSupport()
+  
+  if (!geoCheck.supported) {
+    setError('Geolocation is not supported by your browser. Please use Chrome, Firefox, Safari, or Edge.')
+    setProcessing(false)
+    return
+  }
+
+  if (!geoCheck.secureContext) {
+    setError('Location access requires HTTPS connection. Please access this site via HTTPS or contact your administrator.')
+    setProcessing(false)
+    return
+  }
+
+  // Check if location permission is already denied
+  if (navigator.permissions) {
+    try {
+      const permission = await navigator.permissions.query({ name: 'geolocation' })
+      console.log('📋 Location permission status:', permission.state)
+      
+      if (permission.state === 'denied') {
+        setError(
+          'Location permission is blocked.\n\n' +
+          'To fix this:\n' +
+          '• Click the lock icon in your browser address bar\n' +
+          '• Find Location/Geolocation settings\n' +
+          '• Change permission to "Allow"\n' +
+          '• Refresh the page and try again'
+        )
+        setProcessing(false)
+        return
+      }
+    } catch (permErr) {
+      console.warn('Could not check permission status:', permErr)
+    }
+  }
+
+  try {
+    console.log('📍 Requesting precise GPS location...')
+    
+    const loc = await getCurrentLocation(100, 15000)
+    
+    setLocationAttempts(prev => prev + 1)
+    
+    console.log('✅ Location obtained:', {
+      lat: loc.latitude.toFixed(6),
+      lon: loc.longitude.toFixed(6),
+      accuracy: Math.round(loc.accuracy) + 'm',
+      timestamp: new Date(loc.timestamp).toLocaleTimeString()
+    })
+
+    // Validate accuracy
+    const accuracyCheck = validateLocationAccuracy(loc.accuracy, 200)
+    
+    if (!accuracyCheck.valid) {
+      setError(accuracyCheck.message)
+      setProcessing(false)
+      return
+    }
+
+    if (loc.accuracy > 100) {
+      console.warn(`⚠️ Moderate accuracy: ${Math.round(loc.accuracy)}m`)
+    }
+
+    setLocation(loc)
+    setScanning(true)
+    
+  } catch (err) {
+    console.error('❌ Location error caught:', err)
+    setError(err.message || 'Unable to get your location. Please check permissions and try again.')
+  } finally {
+    setProcessing(false)
+  }
+}
+
 export default function ScanQR() {
   const [user, setUser] = useState(null)
   const [trainee, setTrainee] = useState(null)
