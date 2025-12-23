@@ -3,417 +3,225 @@
 import { Scanner } from '@yudiel/react-qr-scanner'
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
-import { calculateDistance, formatDate, getCurrentLocation } from '@/lib/utils'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
+// Using Hi icons to match the login page consistency
 import { 
   HiOutlineCamera, 
-  HiOutlineMapPin, 
   HiOutlineCheckCircle, 
   HiOutlineXCircle, 
-  HiOutlineArrowLeft 
-} from 'react-icons/hi2'
+  HiOutlineArrowLeft,
+  HiOutlineShieldCheck,
+  HiOutlineRefresh
+} from 'react-icons/hi'
 
 export default function ScanQR() {
+  const router = useRouter()
   const [user, setUser] = useState(null)
   const [trainee, setTrainee] = useState(null)
-
-  const [location, setLocation] = useState(null)
   const [scanning, setScanning] = useState(false)
   const [processing, setProcessing] = useState(false)
   const [scannedOnce, setScannedOnce] = useState(false)
-
   const [error, setError] = useState('')
   const [result, setResult] = useState(null)
 
-  const router = useRouter()
-
-  /* ---------------- AUTH CHECK ---------------- */
   useEffect(() => {
-    checkUser()
+    init()
   }, [])
 
-  const checkUser = async () => {
+  const init = async () => {
     const { data: { user } } = await supabase.auth.getUser()
-
     if (!user) {
       router.push('/login')
       return
     }
-
     setUser(user)
 
-    // FIXED: Use maybeSingle() to handle missing trainee gracefully
-    const { data: traineeData, error: traineeError } = await supabase
+    const { data: traineeData } = await supabase
       .from('trainees')
       .select('*')
       .eq('user_id', user.id)
       .maybeSingle()
 
-    if (traineeError) {
-      console.error('Error fetching trainee:', traineeError)
-      setError('Failed to load trainee profile. Please contact admin.')
-      return
-    }
-
     if (!traineeData) {
-      setError('Trainee profile not found. Please contact admin.')
+      setError('Trainee profile not found. Contact admin.')
       return
     }
-
     setTrainee(traineeData)
   }
 
-  /* ---------------- STEP 1: GET LOCATION FIRST ---------------- */
-  const prepareScanner = async () => {
+  const startScan = () => {
     setError('')
     setResult(null)
-    setProcessing(true)
     setScannedOnce(false)
-
-    try {
-      console.log('📍 Requesting location...')
-      const loc = await getCurrentLocation()
-      console.log('✅ Location obtained:', loc)
-      setLocation(loc)
-      setScanning(true)
-    } catch (err) {
-      console.error('❌ Location error:', err)
-      setError('Unable to get your location. Please enable location services and try again.')
-    } finally {
-      setProcessing(false)
-    }
+    setScanning(true)
   }
 
-  /* ---------------- STEP 2: SCAN QR ---------------- */
   const handleScan = async (data) => {
-    if (!data || scannedOnce || !location) return
-
+    if (!data || scannedOnce) return
     setScannedOnce(true)
     setScanning(false)
     setProcessing(true)
 
     try {
-      console.log('🔍 QR Data received:', data.text)
-
-      // FIXED: Better error handling for JSON parsing
-      let qrData
+      let qr
       try {
-        qrData = JSON.parse(data.text)
-      } catch (parseError) {
-        throw new Error('Invalid QR code format. Please ensure you are scanning the correct QR code.')
+        qr = JSON.parse(data.text)
+      } catch {
+        throw new Error('Invalid QR code format')
       }
 
-      console.log('📋 Parsed QR Data:', qrData)
+      const { training_id, token, expires_at } = qr
+      if (!training_id || !token || !expires_at) throw new Error('Incomplete QR data')
 
-      // FIXED: More specific validation
-      if (!qrData.training_id) {
-        throw new Error('QR code missing training information.')
-      }
-      if (!qrData.date) {
-        throw new Error('QR code missing date information.')
-      }
-      if (!qrData.token) {
-        throw new Error('QR code missing security token.')
-      }
+      const now = Math.floor(Date.now() / 1000)
+      if (now > expires_at) throw new Error('QR code expired. Please scan the latest QR.')
 
-      const today = formatDate(new Date())
-      console.log('📅 Today:', today, 'QR Date:', qrData.date)
+      const { data: training } = await supabase.from('trainings').select('*').eq('id', training_id).single()
+      if (!training) throw new Error('Training session not found')
+      if (training.qr_token !== token) throw new Error('QR code is outdated.')
 
-      if (qrData.date !== today) {
-        throw new Error(`This QR code is for ${qrData.date}. Please scan today's QR code.`)
-      }
-
-      if (!trainee?.id) {
-        throw new Error('Trainee profile not loaded. Please refresh the page and try again.')
-      }
-
-      // FIXED: Check enrollment first
-      const { data: enrollment, error: enrollError } = await supabase
+      const { data: enrollment } = await supabase
         .from('training_enrollments')
         .select('*')
         .eq('trainee_id', trainee.id)
-        .eq('training_id', qrData.training_id)
+        .eq('training_id', training_id)
         .maybeSingle()
 
-      console.log('📝 Enrollment check:', enrollment)
+      if (!enrollment) throw new Error('You are not enrolled in this training')
 
-      if (enrollError) {
-        console.error('Enrollment error:', enrollError)
-        throw new Error('Error checking training enrollment.')
-      }
+      const istNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }))
+      const today = istNow.toISOString().split('T')[0]
 
-      if (!enrollment) {
-        throw new Error('You are not enrolled in this training. Please contact admin.')
-      }
-
-      // Check duplicate attendance
-      const { data: existing, error: existError } = await supabase
+      const { data: existing } = await supabase
         .from('attendance')
         .select('*')
         .eq('trainee_id', trainee.id)
-        .eq('training_id', qrData.training_id)
+        .eq('training_id', training_id)
         .eq('date', today)
         .maybeSingle()
 
-      if (existError) {
-        console.error('Attendance check error:', existError)
-      }
+      if (existing) throw new Error('Attendance already marked for today')
 
-      if (existing) {
-        const time = new Date(existing.check_in_time).toLocaleTimeString('en-IN', {
-          hour: '2-digit',
-          minute: '2-digit',
-          hour12: true
-        })
-        throw new Error(`Attendance already marked today at ${time}.`)
-      }
+      const { error: insertError } = await supabase.from('attendance').insert([{
+        trainee_id: trainee.id,
+        training_id,
+        date: today,
+        qr_token: token,
+        status: 'present'
+      }])
 
-      // Get training details
-      const { data: training, error: trainingError } = await supabase
-        .from('trainings')
-        .select('*')
-        .eq('id', qrData.training_id)
-        .single()
-
-      console.log('🎓 Training data:', training)
-
-      if (trainingError || !training) {
-        console.error('Training error:', trainingError)
-        throw new Error('Training information not found. Please contact admin.')
-      }
-
-      if (training.qr_token !== qrData.token) {
-        throw new Error('QR code has expired. Please scan the latest QR code.')
-      }
-
-      // FIXED: Geofence Calculation with proper number conversion
-      const distance = calculateDistance(
-        parseFloat(location.latitude),
-        parseFloat(location.longitude),
-        parseFloat(training.latitude),
-        parseFloat(training.longitude)
-      )
-
-      console.log('📏 Distance calculated:', distance, 'meters')
-
-      const geofenceRadius = parseInt(training.geofence_radius) || 100
-      const isWithinGeofence = distance <= geofenceRadius
-
-      console.log('🎯 Geofence check:', {
-        distance,
-        radius: geofenceRadius,
-        isValid: isWithinGeofence
-      })
-
-      // FIXED: STRICT GEOFENCE MODE
-      const STRICT_GEOFENCE = true // Set to false to allow out-of-range attendance
-
-      if (STRICT_GEOFENCE && !isWithinGeofence) {
-        throw new Error(
-          `You are ${Math.round(distance)}m away from the training location. ` +
-          `You must be within ${geofenceRadius}m to mark attendance.`
-        )
-      }
-
-      // Save attendance
-      const { error: insertError } = await supabase
-        .from('attendance')
-        .insert([{
-          trainee_id: trainee.id,
-          training_id: training.id,
-          date: today,
-          latitude: parseFloat(location.latitude),
-          longitude: parseFloat(location.longitude),
-          distance_meters: Math.round(distance),
-          is_within_geofence: isWithinGeofence,
-          qr_token: qrData.token,
-          status: 'present'
-        }])
-
-      if (insertError) {
-        console.error('❌ Insert error:', insertError)
-        throw new Error('Failed to save attendance: ' + insertError.message)
-      }
-
-      console.log('✅ Attendance saved successfully!')
+      if (insertError) throw new Error(insertError.message)
 
       setResult({
         success: true,
         trainingName: training.name,
-        distance: distance,
-        isWithinGeofence: isWithinGeofence,
-        time: new Date().toLocaleTimeString('en-IN', { 
-          hour: '2-digit', 
-          minute: '2-digit',
-          hour12: true 
-        })
+        time: istNow.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true })
       })
-
-      // FIXED: Browser notification (if permission granted)
-      if ('Notification' in window && Notification.permission === 'granted') {
-        new Notification('✅ Attendance Marked!', {
-          body: `${training.name} - ${new Date().toLocaleTimeString()}`,
-        })
-      }
-
     } catch (err) {
-      console.error('❌ Scan error:', err)
-      setError(err.message || 'Scan failed due to an unknown error.')
+      setError(err.message)
       setScannedOnce(false)
-      setResult(null)
     } finally {
       setProcessing(false)
     }
   }
 
-  /* ---------------- UI Components ---------------- */
-
-  const LoadingSpinner = () => (
-    <div className="flex flex-col items-center justify-center p-12 space-y-4">
-      <div className="w-10 h-10 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
-      <p className="text-slate-500 font-semibold">
-        {error ? 'Retrying...' : 'Processing Attendance...'}
-      </p>
-    </div>
-  )
-
-  const InitialView = () => (
-    <div className="text-center space-y-6">
-      <HiOutlineMapPin className="text-6xl text-indigo-400 mx-auto" />
-      <h2 className="text-xl font-bold text-slate-800">Start Attendance Check</h2>
-      <p className="text-slate-500 text-sm">
-        Tap below to grant location access and open the camera for scanning.
-      </p>
-      
-      <button
-        onClick={prepareScanner}
-        disabled={processing}
-        className="w-full flex items-center justify-center gap-3 bg-indigo-600 text-white font-bold py-3 rounded-xl shadow-lg shadow-indigo-200 hover:bg-indigo-700 transition-all active:scale-95 disabled:opacity-50"
-      >
-        <HiOutlineCamera className="text-2xl" /> 
-        {processing ? 'Checking Location...' : 'Open Camera & Scan'}
-      </button>
-    </div>
-  )
-
-  const SuccessResult = ({ result }) => (
-    <div className="text-center space-y-6 p-6 bg-emerald-50 rounded-2xl border-2 border-emerald-300">
-      <HiOutlineCheckCircle className="text-6xl text-emerald-600 mx-auto" />
-      <h2 className="text-2xl font-black text-emerald-800">Attendance Marked!</h2>
-      
-      <div className="bg-white p-4 rounded-xl text-left space-y-2 border border-emerald-200">
-        <p className="font-bold text-slate-700">
-          Training: <span className="text-indigo-600">{result.trainingName}</span>
-        </p>
-        <p className="text-sm text-slate-600">
-          Check-in Time: <span className="font-semibold">{result.time}</span>
-        </p>
-        
-        <div className="flex justify-between border-t mt-3 pt-3">
-          <p className="text-sm font-medium text-slate-500">Your Distance:</p>
-          <p className={`text-sm font-bold ${result.isWithinGeofence ? 'text-emerald-600' : 'text-rose-600'}`}>
-            {Math.round(result.distance)} meters
-          </p>
-        </div>
-        
-        <p className={`text-xs font-semibold ${result.isWithinGeofence ? 'text-emerald-500' : 'text-rose-500'}`}>
-          {result.isWithinGeofence ? 'Location Valid ✅' : 'Location Out of Range ❌'}
-        </p>
-      </div>
-
-      <Link 
-        href="/dashboard" 
-        className="w-full flex items-center justify-center gap-2 text-indigo-600 font-bold py-3 rounded-xl bg-indigo-50 hover:bg-indigo-100 transition-colors"
-      >
-        <HiOutlineArrowLeft /> Back to Dashboard
-      </Link>
-    </div>
-  )
-
-  const ErrorResult = ({ message }) => (
-    <div className="text-center space-y-6 p-6 bg-rose-50 rounded-2xl border-2 border-rose-300">
-      <HiOutlineXCircle className="text-6xl text-rose-600 mx-auto" />
-      <h2 className="text-2xl font-black text-rose-800">Check-in Failed</h2>
-      
-      <p className="text-rose-700 font-medium bg-white p-4 rounded-lg border border-rose-200">
-        {message}
-      </p>
-      
-      <button
-        onClick={prepareScanner}
-        className="w-full flex items-center justify-center gap-2 bg-indigo-600 text-white font-bold py-3 rounded-xl shadow-lg shadow-indigo-200 hover:bg-indigo-700 transition-all active:scale-95"
-      >
-        <HiOutlineCamera className="text-2xl" /> Try Again
-      </button>
-
-      <Link 
-        href="/dashboard" 
-        className="w-full flex items-center justify-center gap-2 text-slate-500 font-bold py-3 rounded-xl hover:bg-slate-100 transition-colors"
-      >
-        <HiOutlineArrowLeft /> Dashboard
-      </Link>
-    </div>
-  )
-
-  /* ---------------- MAIN RENDER ---------------- */
   return (
-    <div className="min-h-screen bg-slate-100 p-4 font-sans flex items-center justify-center">
-      <div className="w-full max-w-sm mx-auto bg-white p-6 rounded-3xl shadow-2xl shadow-slate-200/50">
-
-        <h1 className="text-2xl font-black text-center text-slate-800 mb-6">
-          Attendance Scanner
-        </h1>
+    <div className="min-h-screen bg-[#f8fafc] flex items-center justify-center p-6 font-sans">
+      <div className="bg-white rounded-2xl shadow-xl p-8 max-w-sm w-full border border-gray-100">
         
-        {/* Loading/Processing State */}
-        {processing && <LoadingSpinner />}
-        
-        {/* Error State */}
-        {error && !processing && !scanning && <ErrorResult message={error} />}
+        {/* Header Section */}
+        <div className="text-center mb-8">
+          <div className="flex justify-center mb-3">
+            <HiOutlineShieldCheck className="w-12 h-12 text-[#5a4cf4]" />
+          </div>
+          <h1 className="text-2xl font-bold text-[#1e293b]">Attendance Scanner</h1>
+          <p className="text-gray-500 text-sm mt-1">Scan the session QR code</p>
+        </div>
 
-        {/* Initial State */}
-        {!scanning && !processing && !result && !error && <InitialView />}
-
-        {/* Scanning State */}
-        {scanning && (
-          <div className="space-y-4">
-            <p className="text-center text-sm font-semibold text-slate-500">
-              Align QR code within the frame
-            </p>
-            
-            <div className="aspect-square w-full rounded-xl overflow-hidden border-4 border-indigo-500/50 relative">
-              <Scanner
-                onScan={(res) => {
-                  if (res && res.length > 0 && res[0].rawValue) {
-                    handleScan({ text: res[0].rawValue })
-                  }
-                }}
-                onError={(err) => {
-                  console.error('Scanner error:', err)
-                }}
-                constraints={{ facingMode: 'environment' }}
-                styles={{
-                  container: { width: '100%', height: '100%' },
-                  video: { width: '100%', height: '100%', objectFit: 'cover' },
-                }}
-              />
-              <div className="absolute inset-0 border-30 border-white/50 pointer-events-none rounded-xl"></div>
+        {/* State: Processing */}
+        {processing && (
+          <div className="text-center py-10">
+            <div className="animate-spin flex justify-center mb-4">
+              <HiOutlineRefresh className="w-10 h-10 text-[#5a4cf4]" />
             </div>
+            <p className="font-bold text-[#1e293b]">Verifying Attendance...</p>
+          </div>
+        )}
 
+        {/* State: Error */}
+        {error && !processing && (
+          <div className="text-center space-y-6">
+            <div className="bg-red-50 p-4 rounded-2xl">
+              <HiOutlineXCircle className="text-5xl text-red-500 mx-auto mb-2" />
+              <p className="text-red-700 font-bold text-sm leading-relaxed">{error}</p>
+            </div>
             <button
-              onClick={() => {
-                setScanning(false)
-                setScannedOnce(false)
-              }}
-              className="w-full mt-3 bg-red-600 text-white py-3 rounded-xl font-bold hover:bg-red-700 transition-colors"
+              onClick={startScan}
+              className="w-full bg-[#5a4cf4] text-white py-3.5 rounded-xl font-bold shadow-lg active:scale-95 transition-all"
             >
-              Cancel Scan
+              Try Scanning Again
             </button>
           </div>
         )}
 
-        {/* Success State */}
-        {result?.success && <SuccessResult result={result} />}
+        {/* State: Idle / Initial */}
+        {!scanning && !processing && !result && !error && (
+          <div className="space-y-4">
+            <div className="bg-[#ebf2ff] p-6 rounded-2xl border-2 border-dashed border-indigo-200 text-center">
+               <HiOutlineCamera className="w-12 h-12 text-indigo-400 mx-auto mb-2" />
+               <p className="text-indigo-600 text-xs font-bold uppercase tracking-wider">Ready to scan</p>
+            </div>
+            <button
+              onClick={startScan}
+              className="w-full flex items-center justify-center gap-2 bg-[#5a4cf4] hover:bg-[#4a3ee0] text-white py-4 rounded-xl font-bold shadow-md transition-all active:scale-95"
+            >
+              <HiOutlineCamera className="w-5 h-5" /> Open Scanner
+            </button>
+          </div>
+        )}
+
+        {/* State: Scanning */}
+        {scanning && (
+          <div className="space-y-4">
+            <div className="overflow-hidden rounded-2xl border-4 border-[#ebf2ff] shadow-inner">
+              <Scanner
+                onScan={(res) => {
+                  if (res?.[0]?.rawValue) {
+                    handleScan({ text: res[0].rawValue })
+                  }
+                }}
+                constraints={{ facingMode: 'environment' }}
+              />
+            </div>
+            <button
+              onClick={() => setScanning(false)}
+              className="w-full bg-gray-100 hover:bg-gray-200 text-gray-600 py-3 rounded-xl font-bold transition-all"
+            >
+              Cancel
+            </button>
+          </div>
+        )}
+
+        {/* State: Success */}
+        {result?.success && (
+          <div className="text-center space-y-6">
+            <div className="bg-emerald-50 p-6 rounded-2xl">
+              <HiOutlineCheckCircle className="text-6xl text-emerald-500 mx-auto mb-2" />
+              <h2 className="text-xl font-bold text-emerald-800">Attendance Marked!</h2>
+              <div className="mt-2 text-sm text-emerald-700 font-medium">
+                <p className="opacity-75">{result.trainingName}</p>
+                <p className="text-xs mt-1">Logged at: {result.time}</p>
+              </div>
+            </div>
+            <Link
+              href="/dashboard"
+              className="flex items-center justify-center gap-2 text-[#5a4cf4] font-bold text-sm hover:underline"
+            >
+              <HiOutlineArrowLeft className="w-4 h-4" /> Go to Dashboard
+            </Link>
+          </div>
+        )}
 
       </div>
     </div>
