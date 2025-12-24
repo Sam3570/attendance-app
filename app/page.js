@@ -1,7 +1,37 @@
-import Link from "next/link"
-import { HiOutlineShieldCheck, HiOutlineUser, HiOutlineLocationMarker } from "react-icons/hi"
+'use client'
+
+import { useEffect } from 'react'
+import Link from 'next/link'
+import { useRouter } from 'next/navigation'
+import { supabase } from '@/lib/supabase'
+import {
+  HiOutlineShieldCheck,
+  HiOutlineUser,
+  HiOutlineLocationMarker
+} from 'react-icons/hi'
 
 export default function Home() {
+  const router = useRouter()
+
+  useEffect(() => {
+    checkSession()
+  }, [])
+
+  const checkSession = async () => {
+    const { data: { user } } = await supabase.auth.getUser()
+
+    if (!user) return // ❌ Not logged in → show this page
+
+    // ✅ Logged in → redirect based on role
+    const role = user.user_metadata?.role
+
+    if (role === 'admin') {
+      router.replace('/admin/dashboard')
+    } else {
+      router.replace('/dashboard')
+    }
+  }
+
   return (
     <div className="min-h-screen bg-[#F9FAFB] flex items-center justify-center p-4">
       <div className="bg-white rounded-lg shadow-2xl p-8 max-w-md w-full">
@@ -39,7 +69,7 @@ export default function Home() {
         <p className="text-center text-gray-600 text-sm mt-6">
           QR Code + Geofence Based Attendance Tracking
         </p>
-        
+
       </div>
     </div>
   )

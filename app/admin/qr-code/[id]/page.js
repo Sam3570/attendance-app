@@ -8,12 +8,13 @@ import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import {
   HiOutlineArrowLeft,
-  HiOutlineQrcode,
   HiOutlineInformationCircle,
+  HiOutlineRefresh,
+  HiOutlineShieldCheck
 } from 'react-icons/hi'
 
-const INDIGO = '#6366F1'
-const QR_REFRESH_SECONDS = 30 // 🔥 rotate every 30 sec
+const BRAND_PURPLE = '#5a4cf4'
+const QR_REFRESH_SECONDS = 30 
 
 export default function QRCodePage() {
   const { id } = useParams()
@@ -23,8 +24,8 @@ export default function QRCodePage() {
   const [training, setTraining] = useState(null)
   const [qrPayload, setQrPayload] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [isRotating, setIsRotating] = useState(false)
 
-  /* ---------------- AUTH + LOAD ---------------- */
   useEffect(() => {
     init()
     return () => clearInterval(timerRef.current)
@@ -52,106 +53,117 @@ export default function QRCodePage() {
     setTraining(data)
     setLoading(false)
 
-    // Generate immediately + start rotation
+    // Generate first QR
     generateAndRotateQR(data.id)
-    timerRef.current = setInterval(
-      () => generateAndRotateQR(data.id),
-      QR_REFRESH_SECONDS * 1000
-    )
+    
+    // Background rotation logic (no UI timer)
+    timerRef.current = setInterval(() => {
+      generateAndRotateQR(data.id)
+    }, QR_REFRESH_SECONDS * 1000)
   }
 
-  /* ---------------- QR ROTATION (IST SAFE) ---------------- */
   const generateAndRotateQR = async (trainingId) => {
+    setIsRotating(true)
     const token = generateToken()
+    const istNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }))
+    const expiresAt = Math.floor((istNow.getTime() + QR_REFRESH_SECONDS * 1000) / 1000)
 
-    // Get IST timestamp safely
-    const istNow = new Date(
-      new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' })
-    )
+    await supabase.from('trainings').update({ qr_token: token }).eq('id', trainingId)
 
-    const expiresAt = Math.floor(
-      (istNow.getTime() + QR_REFRESH_SECONDS * 1000) / 1000
-    )
-
-    // Save latest token
-    await supabase
-      .from('trainings')
-      .update({ qr_token: token })
-      .eq('id', trainingId)
-
-    // Build QR payload (NO GPS)
     setQrPayload({
       training_id: trainingId,
       token,
       expires_at: expiresAt
     })
+    
+    // Brief animation effect for the icon
+    setTimeout(() => setIsRotating(false), 1000)
   }
 
-  /* ---------------- LOADING ---------------- */
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="w-10 h-10 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
+      <div className="min-h-screen bg-[#f8fafc] flex items-center justify-center">
+        <div className="w-12 h-12 border-4 border-[#5a4cf4] border-t-transparent rounded-full animate-spin"></div>
       </div>
     )
   }
 
   return (
-    <div className="min-h-screen bg-slate-50">
-
+    <div className="min-h-screen bg-[#f8fafc] font-sans">
       {/* HEADER */}
-      <header className="bg-white border-b sticky top-0 z-50">
-        <div className="max-w-6xl mx-auto px-6 py-4 flex justify-between items-center">
-          <h1 className="text-2xl font-extrabold">Live QR Attendance</h1>
+      <header className="bg-white border-b border-gray-100 sticky top-0 z-50">
+        <div className="max-w-5xl mx-auto px-6 py-4 flex justify-between items-center">
+          <div className="flex items-center gap-2">
+            <HiOutlineShieldCheck className="w-8 h-8 text-[#5a4cf4]" />
+            <h1 className="text-xl font-extrabold text-[#1e293b]">Live Attendance</h1>
+          </div>
           <Link
             href="/admin/dashboard"
-            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-100 font-bold"
+            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-[#ebf2ff] text-[#5a4cf4] font-bold text-sm hover:bg-indigo-100 transition-colors"
           >
             <HiOutlineArrowLeft /> Dashboard
           </Link>
         </div>
       </header>
 
-      <main className="max-w-3xl mx-auto px-6 py-10">
-        <div className="bg-white p-8 rounded-3xl shadow-xl border">
+      <main className="max-w-2xl mx-auto px-6 py-10">
+        <div className="bg-white p-10 rounded-[2.5rem] shadow-xl border border-gray-50">
+          
+          <div className="text-center mb-10">
+            <span className="bg-[#ebf2ff] text-[#5a4cf4] text-xs font-black px-4 py-1.5 rounded-full uppercase tracking-widest">
+              Secure Session
+            </span>
+            <h2 className="text-3xl font-black text-[#1e293b] mt-4">
+              {training.name}
+            </h2>
+          </div>
 
-          <h2 className="text-xl font-extrabold mb-4">
-            {training.name}
-          </h2>
-
-          <div className="text-center space-y-6">
-            <div className="inline-block p-6 bg-white border rounded-3xl shadow">
-              {qrPayload && (
+          <div className="text-center space-y-10">
+            {/* QR CODE CONTAINER */}
+            <div className="inline-block p-8 bg-white border-4 border-[#ebf2ff] rounded-[2.5rem] shadow-sm">
+              {qrPayload ? (
                 <QRCodeCanvas
                   value={JSON.stringify(qrPayload)}
-                  size={360}
+                  size={320}
                   level="H"
                   includeMargin
-                  fgColor={INDIGO}
+                  fgColor={BRAND_PURPLE}
                 />
+              ) : (
+                <div className="w-[320px] h-[320px] flex items-center justify-center bg-gray-50 rounded-2xl">
+                  <HiOutlineRefresh className="animate-spin text-gray-300 w-10 h-10" />
+                </div>
               )}
             </div>
 
-            <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4">
-              <p className="font-bold text-emerald-800">
-                QR refreshes every {QR_REFRESH_SECONDS} seconds
-              </p>
-              <p className="text-sm text-emerald-600">
-                Screenshots expire automatically
-              </p>
+            {/* STATUS BADGE */}
+            <div className="bg-[#ebf2ff] rounded-2xl p-6 flex items-center justify-center gap-4">
+               <div className={`bg-white p-2 rounded-lg shadow-sm ${isRotating ? 'animate-spin' : ''}`}>
+                  <HiOutlineRefresh className="w-5 h-5 text-[#5a4cf4]" />
+               </div>
+               <p className="font-bold text-[#1e293b]">Dynamic QR Protection Active</p>
             </div>
 
-            <div className="bg-slate-50 p-6 rounded-2xl border text-left">
-              <h3 className="font-extrabold flex items-center gap-2 mb-2">
-                <HiOutlineInformationCircle className="text-indigo-500" />
-                How it works
+            {/* SECURITY INFO */}
+            <div className="bg-slate-50 p-6 rounded-2xl border border-gray-100 text-left">
+              <h3 className="font-bold text-[#1e293b] flex items-center gap-2 mb-4">
+                <HiOutlineInformationCircle className="text-[#5a4cf4] w-5 h-5" />
+                Security Guidelines
               </h3>
-              <ol className="list-decimal list-inside text-sm space-y-1 text-slate-600">
-                <li>QR changes every 30 seconds</li>
-                <li>Only logged-in trainees can scan</li>
-                <li>Expired QR is rejected</li>
-                <li>One attendance per user per day</li>
-              </ol>
+              <div className="grid grid-cols-1 gap-4 text-sm font-medium text-gray-500">
+                <div className="flex items-center gap-3 bg-white p-3 rounded-xl border border-gray-50">
+                  <div className="w-2 h-2 rounded-full bg-[#5a4cf4]"></div>
+                  <span>Automatically expires screenshots</span>
+                </div>
+                <div className="flex items-center gap-3 bg-white p-3 rounded-xl border border-gray-50">
+                  <div className="w-2 h-2 rounded-full bg-[#5a4cf4]"></div>
+                  <span>Authorized trainee access only</span>
+                </div>
+                <div className="flex items-center gap-3 bg-white p-3 rounded-xl border border-gray-50">
+                  <div className="w-2 h-2 rounded-full bg-[#5a4cf4]"></div>
+                  <span>Single daily attendance per user</span>
+                </div>
+              </div>
             </div>
 
           </div>
